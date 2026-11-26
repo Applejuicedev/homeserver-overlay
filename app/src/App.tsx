@@ -5,7 +5,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { useAgentSocket } from "./hooks/useAgentSocket";
 import { useHistory } from "./hooks/useHistory";
-import { useSettings, type Theme } from "./hooks/useSettings";
+import { useSettings, type Theme, type Thresholds } from "./hooks/useSettings";
+import { useAlerts } from "./hooks/useAlerts";
 import { Sparkline } from "./components/Sparkline";
 import "./App.css";
 
@@ -38,7 +39,10 @@ export default function App() {
 
   const { metrics, status } = useAgentSocket(serverUrl, token);
   const history = useHistory(serverUrl, token, 30);
-  const { theme, setTheme, opacity, setOpacity, widgets, toggleWidget } = useSettings();
+  const { theme, setTheme, opacity, setOpacity, widgets, toggleWidget, thresholds, setThreshold } =
+    useSettings();
+
+  useAlerts(metrics, status, thresholds);
 
   useEffect(() => {
     const unlisten = listen("toggle-click-through", () => {
@@ -106,6 +110,8 @@ export default function App() {
           setOpacity={setOpacity}
           widgets={widgets}
           toggleWidget={toggleWidget}
+          thresholds={thresholds}
+          setThreshold={setThreshold}
         />
       ) : metrics ? (
         <div className="metrics">
@@ -124,7 +130,10 @@ export default function App() {
           )}
           <div className="footer-row">
             <span>Uptime {formatUptime(metrics.uptime_seconds)}</span>
-            <span>Load {metrics.load_avg[0].toFixed(2)}</span>
+            <span>
+              Load {metrics.load_avg[0].toFixed(2)}
+              {metrics.cpu_temp_celsius != null ? ` · ${metrics.cpu_temp_celsius.toFixed(0)}°C` : ""}
+            </span>
           </div>
 
           {expanded && (
@@ -227,10 +236,16 @@ interface SettingsPanelProps {
   setOpacity: (o: number) => void;
   widgets: { sparklines: boolean; containers: boolean; smart: boolean };
   toggleWidget: (k: "sparklines" | "containers" | "smart") => void;
+  thresholds: Thresholds;
+  setThreshold: (k: keyof Thresholds, v: number) => void;
 }
 
 function SettingsPanel(props: SettingsPanelProps) {
-  const { serverUrl, setServerUrl, token, setToken, onSave, theme, setTheme, opacity, setOpacity, widgets, toggleWidget } = props;
+  const {
+    serverUrl, setServerUrl, token, setToken, onSave,
+    theme, setTheme, opacity, setOpacity,
+    widgets, toggleWidget, thresholds, setThreshold,
+  } = props;
 
   return (
     <div className="settings">
@@ -284,6 +299,28 @@ function SettingsPanel(props: SettingsPanelProps) {
       <div className="settings-row">
         <span>Festplatten-Gesundheit</span>
         <input type="checkbox" checked={widgets.smart} onChange={() => toggleWidget("smart")} />
+      </div>
+
+      <div className="section-title">Alarm-Schwellwerte</div>
+      <div className="settings-row">
+        <span>CPU-Temperatur &gt;</span>
+        <input
+          type="number"
+          style={{ width: 50 }}
+          value={thresholds.cpuTempCelsius}
+          onChange={(e) => setThreshold("cpuTempCelsius", Number(e.target.value))}
+        />
+        <span>°C</span>
+      </div>
+      <div className="settings-row">
+        <span>Speicher belegt &gt;</span>
+        <input
+          type="number"
+          style={{ width: 50 }}
+          value={thresholds.diskPercent}
+          onChange={(e) => setThreshold("diskPercent", Number(e.target.value))}
+        />
+        <span>%</span>
       </div>
     </div>
   );

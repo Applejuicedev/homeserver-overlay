@@ -20,6 +20,7 @@ pub struct Metrics {
     pub containers: Vec<ContainerInfo>,
     #[serde(default)]
     pub smart: Vec<SmartInfo>,
+    pub cpu_temp_celsius: Option<f32>,
 }
 
 #[derive(Serialize, Clone)]
@@ -86,6 +87,7 @@ impl Collector {
             uptime_seconds: System::uptime(),
             containers: vec![],
             smart: vec![],
+            cpu_temp_celsius: crate::temperature::read_cpu_temp_celsius(),
         }
     }
 }

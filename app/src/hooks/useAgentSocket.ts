@@ -34,6 +34,7 @@ export interface Metrics {
   uptime_seconds: number;
   containers: ContainerInfo[];
   smart: SmartInfo[];
+  cpu_temp_celsius: number | null;
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";

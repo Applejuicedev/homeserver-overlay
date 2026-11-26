@@ -8,10 +8,20 @@ export interface WidgetVisibility {
   smart: boolean;
 }
 
+export interface Thresholds {
+  cpuTempCelsius: number;
+  diskPercent: number;
+}
+
 const DEFAULT_WIDGETS: WidgetVisibility = {
   sparklines: true,
   containers: true,
   smart: true,
+};
+
+const DEFAULT_THRESHOLDS: Thresholds = {
+  cpuTempCelsius: 80,
+  diskPercent: 90,
 };
 
 function load<T>(key: string, fallback: T): T {
@@ -28,6 +38,9 @@ export function useSettings() {
   const [opacity, setOpacity] = useState<number>(() => load("ui_opacity", 1));
   const [widgets, setWidgets] = useState<WidgetVisibility>(() =>
     load("ui_widgets", DEFAULT_WIDGETS)
+  );
+  const [thresholds, setThresholds] = useState<Thresholds>(() =>
+    load("ui_thresholds", DEFAULT_THRESHOLDS)
   );
 
   useEffect(() => {
@@ -48,9 +61,26 @@ export function useSettings() {
     localStorage.setItem("ui_widgets", JSON.stringify(widgets));
   }, [widgets]);
 
+  useEffect(() => {
+    localStorage.setItem("ui_thresholds", JSON.stringify(thresholds));
+  }, [thresholds]);
+
   function toggleWidget(key: keyof WidgetVisibility) {
     setWidgets((w) => ({ ...w, [key]: !w[key] }));
   }
 
-  return { theme, setTheme, opacity, setOpacity, widgets, toggleWidget };
+  function setThreshold(key: keyof Thresholds, value: number) {
+    setThresholds((t) => ({ ...t, [key]: value }));
+  }
+
+  return {
+    theme,
+    setTheme,
+    opacity,
+    setOpacity,
+    widgets,
+    toggleWidget,
+    thresholds,
+    setThreshold,
+  };
 }

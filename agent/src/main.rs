@@ -3,6 +3,7 @@ mod docker;
 mod history;
 mod metrics;
 mod smart;
+mod temperature;
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
