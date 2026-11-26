@@ -7,6 +7,7 @@ import { useAgentSocket } from "./hooks/useAgentSocket";
 import { useHistory } from "./hooks/useHistory";
 import { useSettings, type Theme, type Thresholds } from "./hooks/useSettings";
 import { useAlerts } from "./hooks/useAlerts";
+import { useUpdater } from "./hooks/useUpdater";
 import { Sparkline } from "./components/Sparkline";
 import "./App.css";
 
@@ -32,8 +33,22 @@ export default function App() {
   const [serverUrl, setServerUrl] = useState(
     () => localStorage.getItem("agent_url") ?? "http://100.82.168.54:9090"
   );
-  const [token, setToken] = useState(() => localStorage.getItem("agent_token") ?? "");
-  const [showSettings, setShowSettings] = useState(!token);
+  const [token, setToken] = useState("");
+  const [tokenLoaded, setTokenLoaded] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+
+  useEffect(() => {
+    invoke<string | null>("load_token")
+      .then((saved) => {
+        if (saved) {
+          setToken(saved);
+        } else {
+          setShowSettings(true);
+        }
+      })
+      .catch(() => setShowSettings(true))
+      .finally(() => setTokenLoaded(true));
+  }, []);
   const [expanded, setExpanded] = useState(false);
   const [clickThrough, setClickThrough] = useState(false);
 
@@ -43,6 +58,7 @@ export default function App() {
     useSettings();
 
   useAlerts(metrics, status, thresholds);
+  const { update, installUpdate, installing } = useUpdater();
 
   useEffect(() => {
     const unlisten = listen("toggle-click-through", () => {
@@ -66,7 +82,7 @@ export default function App() {
 
   function saveSettings() {
     localStorage.setItem("agent_url", serverUrl);
-    localStorage.setItem("agent_token", token);
+    invoke("save_token", { token }).catch(() => {});
     setShowSettings(false);
   }
 
@@ -97,7 +113,9 @@ export default function App() {
         </button>
       </div>
 
-      {showSettings ? (
+      {!tokenLoaded ? (
+        <div className="offline">Lade…</div>
+      ) : showSettings ? (
         <SettingsPanel
           serverUrl={serverUrl}
           setServerUrl={setServerUrl}
@@ -112,6 +130,9 @@ export default function App() {
           toggleWidget={toggleWidget}
           thresholds={thresholds}
           setThreshold={setThreshold}
+          updateVersion={update?.version ?? null}
+          onInstallUpdate={installUpdate}
+          installing={installing}
         />
       ) : metrics ? (
         <div className="metrics">
@@ -238,6 +259,9 @@ interface SettingsPanelProps {
   toggleWidget: (k: "sparklines" | "containers" | "smart") => void;
   thresholds: Thresholds;
   setThreshold: (k: keyof Thresholds, v: number) => void;
+  updateVersion: string | null;
+  onInstallUpdate: () => void;
+  installing: boolean;
 }
 
 function SettingsPanel(props: SettingsPanelProps) {
@@ -245,6 +269,7 @@ function SettingsPanel(props: SettingsPanelProps) {
     serverUrl, setServerUrl, token, setToken, onSave,
     theme, setTheme, opacity, setOpacity,
     widgets, toggleWidget, thresholds, setThreshold,
+    updateVersion, onInstallUpdate, installing,
   } = props;
 
   return (
@@ -322,6 +347,18 @@ function SettingsPanel(props: SettingsPanelProps) {
         />
         <span>%</span>
       </div>
+
+      {updateVersion && (
+        <>
+          <div className="section-title">Update</div>
+          <div className="settings-row">
+            <span>Version {updateVersion} verfügbar</span>
+            <button onClick={onInstallUpdate} disabled={installing} style={{ margin: 0 }}>
+              {installing ? "Installiere…" : "Installieren"}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

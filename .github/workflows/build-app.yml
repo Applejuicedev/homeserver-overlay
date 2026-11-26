@@ -3,9 +3,8 @@ name: Build Desktop App
 on:
   push:
     branches: [master, main]
-    paths:
-      - 'app/**'
-      - '.github/workflows/build-app.yml'
+    tags:
+      - 'app-v*'
   workflow_dispatch:
 
 jobs:
@@ -41,15 +40,46 @@ jobs:
         working-directory: ./app
         run: npm ci
 
-      - name: Build Tauri app
+      - name: Build Tauri app (dev push, no release)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # --- Platzhalter fuer macOS Code-Signing/Notarisierung (Apple Developer Account noetig) ---
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # --- Platzhalter fuer Windows Code-Signing (Zertifikat noetig) ---
+          # WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          # WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         with:
           projectPath: ./app
           args: ${{ matrix.args }}
 
-      - name: Upload build artifacts
+      - name: Build + Release Tauri app (Tag-Push)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Siehe Platzhalter-Kommentare oben - gleiche Variablen hier setzen, sobald Zertifikate vorhanden sind
+        with:
+          projectPath: ./app
+          args: ${{ matrix.args }}
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Homeserver Overlay ${{ github.ref_name }}'
+          releaseBody: 'Siehe Commit-Historie fuer Details.'
+          releaseDraft: true
+          includeUpdaterJson: true
+
+      - name: Upload build artifacts (nur Dev-Push, kein Release)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
           name: app-${{ matrix.platform }}

@@ -8,6 +8,34 @@ fn set_click_through(window: tauri::WebviewWindow, enabled: bool) -> Result<(), 
     window.set_ignore_cursor_events(enabled).map_err(|e| e.to_string())
 }
 
+const KEYRING_SERVICE: &str = "de.vincefidanli.homeserveroverlay";
+const KEYRING_USER: &str = "agent-token";
+
+#[tauri::command]
+fn save_token(token: String) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| e.to_string())?;
+    entry.set_password(&token).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn load_token() -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(pw) => Ok(Some(pw)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn delete_token() -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| e.to_string())?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -19,6 +47,8 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -79,7 +109,12 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![set_click_through])
+        .invoke_handler(tauri::generate_handler![
+            set_click_through,
+            save_token,
+            load_token,
+            delete_token
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
