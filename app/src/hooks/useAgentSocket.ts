@@ -6,6 +6,20 @@ export interface DiskInfo {
   available_bytes: number;
 }
 
+export interface ContainerInfo {
+  name: string;
+  state: string;
+  status: string;
+  cpu_percent: number;
+  mem_usage: string;
+}
+
+export interface SmartInfo {
+  device: string;
+  health_ok: boolean;
+  temperature_celsius: number | null;
+}
+
 export interface Metrics {
   timestamp: number;
   hostname: string;
@@ -18,6 +32,8 @@ export interface Metrics {
   swap_used_bytes: number;
   disks: DiskInfo[];
   uptime_seconds: number;
+  containers: ContainerInfo[];
+  smart: SmartInfo[];
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
