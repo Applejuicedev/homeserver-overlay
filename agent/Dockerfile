@@ -1,4 +1,4 @@
-FROM rust:1.84-slim AS builder
+FROM rust:slim AS builder
 WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config libssl-dev \
