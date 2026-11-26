@@ -1,3 +1,5 @@
+use crate::docker::ContainerInfo;
+use crate::smart::SmartInfo;
 use serde::Serialize;
 use sysinfo::{Disks, System};
 
@@ -14,6 +16,10 @@ pub struct Metrics {
     pub swap_used_bytes: u64,
     pub disks: Vec<DiskInfo>,
     pub uptime_seconds: u64,
+    #[serde(default)]
+    pub containers: Vec<ContainerInfo>,
+    #[serde(default)]
+    pub smart: Vec<SmartInfo>,
 }
 
 #[derive(Serialize, Clone)]
@@ -78,6 +84,8 @@ impl Collector {
             swap_used_bytes: self.sys.used_swap(),
             disks,
             uptime_seconds: System::uptime(),
+            containers: vec![],
+            smart: vec![],
         }
     }
 }

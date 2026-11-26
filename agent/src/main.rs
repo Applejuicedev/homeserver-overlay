@@ -1,6 +1,8 @@
 mod auth;
+mod docker;
 mod history;
 mod metrics;
+mod smart;
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
@@ -45,18 +47,26 @@ async fn main() {
         let history = history.clone();
         tokio::spawn(async move {
             let mut collector = Collector::new();
+            let disks = smart::detect_disks();
             let mut tick: u64 = 0;
+            let mut cached_containers: Vec<docker::ContainerInfo> = vec![];
+            let mut cached_smart: Vec<smart::SmartInfo> = vec![];
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             loop {
                 interval.tick().await;
-                let snapshot = collector.collect();
-                let _ = tx.send(snapshot.clone());
+                let mut snapshot = collector.collect();
 
-                // Historie nur alle 5 Sekunden schreiben, um die DB klein zu halten
+                // Docker/SMART sind teurer (Subprozesse) und werden nur alle 5s aktualisiert
                 tick += 1;
                 if tick % 5 == 0 {
+                    cached_containers = docker::collect_containers();
+                    cached_smart = smart::collect_smart(&disks);
                     history.insert(&snapshot);
                 }
+                snapshot.containers = cached_containers.clone();
+                snapshot.smart = cached_smart.clone();
+
+                let _ = tx.send(snapshot);
             }
         });
     }
