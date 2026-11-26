@@ -1,23 +1,31 @@
+mod auth;
+mod history;
 mod metrics;
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
-    extract::State,
+    extract::{Query, State},
+    http::StatusCode,
     response::IntoResponse,
     routing::get,
-    Router,
+    Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::broadcast;
 use tracing::{info, warn};
 
-use metrics::Collector;
+use history::History;
+use metrics::{Collector, Metrics};
 
 #[derive(Clone)]
 struct AppState {
-    collector: Arc<Mutex<Collector>>,
+    tx: broadcast::Sender<Metrics>,
+    history: Arc<History>,
+    token: Arc<String>,
 }
 
 #[tokio::main]
@@ -25,14 +33,44 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let bind_addr = std::env::var("AGENT_BIND").unwrap_or_else(|_| "0.0.0.0:9090".to_string());
+    let token = auth::load_or_create_token();
+    info!("Auth-Token bereit (siehe /etc/homeserver-agent/token)");
+
+    let history = Arc::new(History::open());
+    let (tx, _rx) = broadcast::channel::<Metrics>(16);
+
+    // Zentraler Collector: sammelt 1x/Sekunde, verteilt an alle Clients + Historie
+    {
+        let tx = tx.clone();
+        let history = history.clone();
+        tokio::spawn(async move {
+            let mut collector = Collector::new();
+            let mut tick: u64 = 0;
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                interval.tick().await;
+                let snapshot = collector.collect();
+                let _ = tx.send(snapshot.clone());
+
+                // Historie nur alle 5 Sekunden schreiben, um die DB klein zu halten
+                tick += 1;
+                if tick % 5 == 0 {
+                    history.insert(&snapshot);
+                }
+            }
+        });
+    }
 
     let state = AppState {
-        collector: Arc::new(Mutex::new(Collector::new())),
+        tx,
+        history,
+        token: Arc::new(token),
     };
 
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/ws", get(ws_handler))
+        .route("/api/history", get(history_handler))
         .with_state(state);
 
     let addr: SocketAddr = bind_addr.parse().expect("ungueltige AGENT_BIND Adresse");
@@ -42,15 +80,26 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+fn check_token(params: &HashMap<String, String>, expected: &str) -> bool {
+    auth::is_valid(params.get("token").map(|s| s.as_str()), expected)
+}
+
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    if !check_token(&params, &state.token) {
+        return (StatusCode::UNAUTHORIZED, "ungueltiges Token").into_response();
+    }
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
 async fn handle_socket(socket: WebSocket, state: AppState) {
     info!("Client verbunden");
     let (mut sender, mut receiver) = socket.split();
+    let mut rx = state.tx.subscribe();
 
-    // Client-Nachrichten verwerfen, aber Verbindung auf Trennung ueberwachen
     let recv_task = tokio::spawn(async move {
         while let Some(msg) = receiver.next().await {
             if msg.is_err() {
@@ -60,22 +109,22 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     });
 
     let send_task = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
         loop {
-            interval.tick().await;
-            let snapshot = {
-                let mut c = state.collector.lock().unwrap();
-                c.collect()
-            };
-            let json = match serde_json::to_string(&snapshot) {
-                Ok(j) => j,
-                Err(e) => {
-                    warn!("Serialisierung fehlgeschlagen: {e}");
-                    continue;
+            match rx.recv().await {
+                Ok(snapshot) => {
+                    let json = match serde_json::to_string(&snapshot) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            warn!("Serialisierung fehlgeschlagen: {e}");
+                            continue;
+                        }
+                    };
+                    if sender.send(Message::Text(json)).await.is_err() {
+                        break;
+                    }
                 }
-            };
-            if sender.send(Message::Text(json)).await.is_err() {
-                break;
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
             }
         }
     });
@@ -85,4 +134,27 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         _ = send_task => {},
     }
     info!("Client getrennt");
+}
+
+async fn history_handler(
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    if !check_token(&params, &state.token) {
+        return (StatusCode::UNAUTHORIZED, "ungueltiges Token").into_response();
+    }
+
+    let minutes: i64 = params
+        .get("minutes")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let since = now - minutes * 60;
+
+    let points = state.history.query_since(since);
+    Json(points).into_response()
 }
