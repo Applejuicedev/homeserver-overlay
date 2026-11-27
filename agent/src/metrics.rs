@@ -57,7 +57,7 @@ impl Collector {
     pub fn collect(&mut self) -> Metrics {
         self.sys.refresh_cpu_usage();
         self.sys.refresh_memory();
-        self.disks.refresh();
+        self.disks.refresh_list();
         self.networks.refresh();
 
         let load = System::load_average();
