@@ -14,17 +14,27 @@
       {
         "label": "overlay",
         "title": "Homeserver Overlay",
-        "width": 300,
-        "height": 190,
-        "minWidth": 260,
-        "minHeight": 150,
-        "resizable": true,
+        "width": 210,
+        "height": 122,
+        "resizable": false,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "shadow": false,
         "visible": true
+      },
+      {
+        "label": "terminal",
+        "title": "Homeserver Shell",
+        "url": "index.html?window=terminal",
+        "width": 900,
+        "height": 550,
+        "minWidth": 500,
+        "minHeight": 300,
+        "resizable": true,
+        "decorations": true,
+        "visible": false
       }
     ],
     "security": {

@@ -26,8 +26,36 @@ function formatUptime(seconds: number): string {
   return parts.join(" ");
 }
 
-const COMPACT_SIZE = { width: 300, height: 190 };
-const EXPANDED_SIZE = { width: 420, height: 560 };
+function formatRate(bytesPerSec: number): string {
+  if (bytesPerSec >= 1e6) return `${(bytesPerSec / 1e6).toFixed(1)} MB/s`;
+  if (bytesPerSec >= 1e3) return `${(bytesPerSec / 1e3).toFixed(0)} KB/s`;
+  return `${bytesPerSec.toFixed(0)} B/s`;
+}
+
+type Level = "good" | "warn" | "crit";
+
+function levelFor(value: number, warn: number, crit: number): Level {
+  if (value >= crit) return "crit";
+  if (value >= warn) return "warn";
+  return "good";
+}
+
+function colorForLevel(level: Level): string {
+  return level === "crit" ? "var(--bad)" : level === "warn" ? "var(--warn)" : "var(--good)";
+}
+
+function colorFor(value: number, warn: number, crit: number): string {
+  return colorForLevel(levelFor(value, warn, crit));
+}
+
+function diskLabel(mountPoint: string): string {
+  if (mountPoint === "/") return "/";
+  const parts = mountPoint.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? mountPoint;
+}
+
+const COMPACT_SIZE = { width: 210, height: 122 };
+const EXPANDED_SIZE = { width: 460, height: 660 };
 
 export default function App() {
   const [serverUrl, setServerUrl] = useState(
@@ -61,23 +89,40 @@ export default function App() {
   const { update, installUpdate, installing } = useUpdater();
 
   useEffect(() => {
-    const unlisten = listen("toggle-click-through", () => {
-      setClickThrough((prev) => {
-        const next = !prev;
-        invoke("set_click_through", { enabled: next }).catch(() => {});
-        return next;
-      });
-    });
+    let unlisten: (() => void) | undefined;
+    try {
+      listen("toggle-click-through", () => {
+        setClickThrough((prev) => {
+          const next = !prev;
+          invoke("set_click_through", { enabled: next }).catch(() => {});
+          return next;
+        });
+      })
+        .then((f) => {
+          unlisten = f;
+        })
+        .catch(() => {});
+    } catch {
+      // Tauri-Bridge noch nicht bereit - Hotkey-Events bleiben dann aus
+    }
     return () => {
-      unlisten.then((f) => f());
+      try {
+        unlisten?.();
+      } catch {
+        // ignore
+      }
     };
   }, []);
 
   useEffect(() => {
     const size = expanded ? EXPANDED_SIZE : COMPACT_SIZE;
-    getCurrentWindow()
-      .setSize(new LogicalSize(size.width, size.height))
-      .catch(() => {});
+    try {
+      getCurrentWindow()
+        .setSize(new LogicalSize(size.width, size.height))
+        .catch((e) => console.error("setSize failed", e));
+    } catch {
+      // Tauri-Bridge noch nicht bereit - Fenstergroesse bleibt dann unveraendert
+    }
   }, [expanded]);
 
   function saveSettings() {
@@ -86,9 +131,36 @@ export default function App() {
     setShowSettings(false);
   }
 
-  const disk = metrics?.disks?.[0];
   const memPercent = metrics ? (metrics.mem_used_bytes / metrics.mem_total_bytes) * 100 : 0;
-  const diskPercent = disk ? ((disk.total_bytes - disk.available_bytes) / disk.total_bytes) * 100 : 0;
+  const swapPercent =
+    metrics && metrics.swap_total_bytes > 0 ? (metrics.swap_used_bytes / metrics.swap_total_bytes) * 100 : 0;
+  const rootDisk = metrics?.disks.find((d) => d.mount_point === "/") ?? metrics?.disks[0];
+  const rootDiskPercent = rootDisk
+    ? ((rootDisk.total_bytes - rootDisk.available_bytes) / rootDisk.total_bytes) * 100
+    : 0;
+  const otherDisks = metrics?.disks.filter((d) => d !== rootDisk) ?? [];
+
+  const levels: Level[] = [];
+  if (metrics) {
+    levels.push(levelFor(metrics.cpu_percent_total, 70, 90));
+    levels.push(levelFor(memPercent, 70, 90));
+    if (metrics.swap_total_bytes > 0) levels.push(levelFor(swapPercent, 50, 80));
+    for (const d of metrics.disks) {
+      const pct = ((d.total_bytes - d.available_bytes) / d.total_bytes) * 100;
+      levels.push(levelFor(pct, thresholds.diskPercent - 15, thresholds.diskPercent));
+    }
+    if (metrics.cpu_temp_celsius != null) {
+      levels.push(levelFor(metrics.cpu_temp_celsius, thresholds.cpuTempCelsius - 15, thresholds.cpuTempCelsius));
+    }
+    for (const c of metrics.containers) {
+      if (c.state !== "running") levels.push("crit");
+    }
+    for (const s of metrics.smart) {
+      if (!s.health_ok) levels.push("crit");
+    }
+  }
+  const critCount = levels.filter((l) => l === "crit").length;
+  const warnCount = levels.filter((l) => l === "warn").length;
 
   const statusColor =
     status === "connected" ? "var(--good)" : status === "connecting" ? "var(--warn)" : "var(--bad)";
@@ -101,10 +173,31 @@ export default function App() {
     <div
       className={`overlay ${clickThrough ? "click-through" : ""}`}
       style={{ opacity }}
+      title={!expanded ? "Strg+Alt+H: Klick-durch umschalten" : undefined}
     >
       <div className="titlebar" data-tauri-drag-region>
-        <span className="status-dot" style={{ background: statusColor, color: statusColor }} />
-        <span className="hostname">{metrics?.hostname ?? "homeserver"}</span>
+        <span
+          className="status-dot"
+          data-tauri-drag-region
+          style={{ background: statusColor, color: statusColor }}
+          title={
+            status === "connected"
+              ? critCount > 0
+                ? `${critCount} Wert${critCount === 1 ? "" : "e"} kritisch`
+                : warnCount > 0
+                  ? `${warnCount} Wert${warnCount === 1 ? "" : "e"} im Warnbereich`
+                  : "Alles okay"
+              : undefined
+          }
+        />
+        <span className="hostname" data-tauri-drag-region>{metrics?.hostname ?? "homeserver"}</span>
+        <button
+          className="icon-btn"
+          onClick={() => invoke("open_terminal_window").catch(() => {})}
+          title="SSH-Shell öffnen"
+        >
+          ⌨
+        </button>
         <button className="icon-btn" onClick={() => setExpanded((e) => !e)} title="Dashboard ein-/ausklappen">
           {expanded ? "▾" : "▸"}
         </button>
@@ -134,44 +227,164 @@ export default function App() {
           onInstallUpdate={installUpdate}
           installing={installing}
         />
+      ) : metrics && !expanded ? (
+        <MiniGaugeRow
+          items={[
+            {
+              label: "CPU",
+              value: `${metrics.cpu_percent_total.toFixed(0)}%`,
+              percent: metrics.cpu_percent_total,
+              color: colorFor(metrics.cpu_percent_total, 70, 90),
+            },
+            {
+              label: "RAM",
+              value: `${memPercent.toFixed(0)}%`,
+              percent: memPercent,
+              color: colorFor(memPercent, 70, 90),
+            },
+            {
+              label: "Disk",
+              value: `${rootDiskPercent.toFixed(0)}%`,
+              percent: rootDiskPercent,
+              color: colorFor(rootDiskPercent, thresholds.diskPercent - 15, thresholds.diskPercent),
+            },
+          ]}
+        />
       ) : metrics ? (
         <div className="metrics">
-          <Row label="CPU" percent={metrics.cpu_percent_total} value={`${metrics.cpu_percent_total.toFixed(0)}%`} />
-          <Row
-            label="RAM"
-            percent={memPercent}
-            value={`${formatBytesGB(metrics.mem_used_bytes)} / ${formatBytesGB(metrics.mem_total_bytes)} GB`}
-          />
-          {disk && (
-            <Row
-              label="Disk"
-              percent={diskPercent}
-              value={`${formatBytesGB(disk.total_bytes - disk.available_bytes)} / ${formatBytesGB(disk.total_bytes)} GB`}
+          <div className="gauge-grid">
+            <Gauge
+              label="CPU"
+              percent={metrics.cpu_percent_total}
+              value={`${metrics.cpu_percent_total.toFixed(0)}%`}
+              color={colorFor(metrics.cpu_percent_total, 70, 90)}
             />
-          )}
-          <div className="footer-row">
-            <span>Uptime {formatUptime(metrics.uptime_seconds)}</span>
-            <span>
-              Load {metrics.load_avg[0].toFixed(2)}
-              {metrics.cpu_temp_celsius != null ? ` · ${metrics.cpu_temp_celsius.toFixed(0)}°C` : ""}
-            </span>
+            <Gauge
+              label="RAM"
+              percent={memPercent}
+              value={`${memPercent.toFixed(0)}%`}
+              color={colorFor(memPercent, 70, 90)}
+            />
+            {rootDisk && (
+              <Gauge
+                label="Disk"
+                percent={rootDiskPercent}
+                value={`${rootDiskPercent.toFixed(0)}%`}
+                color={colorFor(rootDiskPercent, thresholds.diskPercent - 15, thresholds.diskPercent)}
+              />
+            )}
+            {metrics.cpu_temp_celsius != null ? (
+              <Gauge
+                label="Temp"
+                percent={metrics.cpu_temp_celsius}
+                value={`${metrics.cpu_temp_celsius.toFixed(0)}°C`}
+                color={colorFor(metrics.cpu_temp_celsius, thresholds.cpuTempCelsius - 15, thresholds.cpuTempCelsius)}
+              />
+            ) : (
+              metrics.swap_total_bytes > 0 && (
+                <Gauge
+                  label="Swap"
+                  percent={swapPercent}
+                  value={`${swapPercent.toFixed(0)}%`}
+                  color={colorFor(swapPercent, 50, 80)}
+                />
+              )
+            )}
           </div>
 
-          {expanded && (
-            <>
+          <div className="info-grid">
+            <div className="info-cell">
+              <span>Uptime</span>
+              <span>{formatUptime(metrics.uptime_seconds)}</span>
+            </div>
+            <div className="info-cell">
+              <span>Load</span>
+              <span>{metrics.load_avg[0].toFixed(2)}</span>
+            </div>
+            <div className="info-cell">
+              <span>↓ Netz</span>
+              <span>{formatRate(metrics.network_rx_bytes_per_sec)}</span>
+            </div>
+            <div className="info-cell">
+              <span>↑ Netz</span>
+              <span>{formatRate(metrics.network_tx_bytes_per_sec)}</span>
+            </div>
+            {metrics.cpu_temp_celsius != null && metrics.swap_total_bytes > 0 && (
+              <div className="info-cell">
+                <span>Swap</span>
+                <span style={{ color: colorFor(swapPercent, 50, 80) }}>
+                  {formatBytesGB(metrics.swap_used_bytes)} / {formatBytesGB(metrics.swap_total_bytes)} GB
+                </span>
+              </div>
+            )}
+          </div>
+
+          <>
+              {otherDisks.length > 0 && (
+                <div className="info-grid">
+                  {otherDisks.map((d) => {
+                    const pct = ((d.total_bytes - d.available_bytes) / d.total_bytes) * 100;
+                    return (
+                      <div className="info-cell" key={d.mount_point}>
+                        <span>{diskLabel(d.mount_point)}</span>
+                        <span style={{ color: colorFor(pct, thresholds.diskPercent - 15, thresholds.diskPercent) }}>
+                          {pct.toFixed(0)}%
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               {widgets.sparklines && (
                 <>
                   <div className="section-title">Verlauf (30 Min)</div>
-                  <div className="sparkline-row">
-                    <Sparkline values={cpuHistory} color="#5b8def" />
-                  </div>
-                  <div className="sparkline-row">
-                    <Sparkline values={memHistory} color="#3fb950" />
-                  </div>
-                  <div className="sparkline-row">
-                    <Sparkline values={diskHistory} color="#d29922" />
+                  <div className="chart-grid">
+                    <div className="chart-card">
+                      <div className="chart-head">
+                        <span>CPU</span>
+                        <span style={{ color: colorFor(metrics.cpu_percent_total, 70, 90) }}>
+                          {metrics.cpu_percent_total.toFixed(0)}%
+                        </span>
+                      </div>
+                      <Sparkline values={cpuHistory} color={colorFor(metrics.cpu_percent_total, 70, 90)} height={26} />
+                    </div>
+                    <div className="chart-card">
+                      <div className="chart-head">
+                        <span>RAM</span>
+                        <span style={{ color: colorFor(memPercent, 70, 90) }}>{memPercent.toFixed(0)}%</span>
+                      </div>
+                      <Sparkline values={memHistory} color={colorFor(memPercent, 70, 90)} height={26} />
+                    </div>
+                    <div className="chart-card">
+                      <div className="chart-head">
+                        <span>Disk</span>
+                        <span style={{ color: colorFor(rootDiskPercent, thresholds.diskPercent - 15, thresholds.diskPercent) }}>
+                          {rootDiskPercent.toFixed(0)}%
+                        </span>
+                      </div>
+                      <Sparkline
+                        values={diskHistory}
+                        color={colorFor(rootDiskPercent, thresholds.diskPercent - 15, thresholds.diskPercent)}
+                        height={26}
+                      />
+                    </div>
                   </div>
                 </>
+              )}
+
+              {metrics.cpu_percent_per_core.length > 1 && (
+                <div className="core-grid">
+                  {metrics.cpu_percent_per_core.map((pct, i) => (
+                    <div
+                      key={i}
+                      className="core-chip"
+                      style={{ color: colorFor(pct, 70, 90), borderColor: colorFor(pct, 70, 90) }}
+                    >
+                      C{i} {pct.toFixed(0)}%
+                    </div>
+                  ))}
+                </div>
               )}
 
               {widgets.containers && (
@@ -184,7 +397,10 @@ export default function App() {
                     {metrics.containers.map((c) => (
                       <div className="container-item" key={c.name}>
                         <span className="name">{c.name}</span>
-                        <span className="name" style={{ flex: "none", opacity: 0.7 }}>
+                        <span
+                          className="name"
+                          style={{ flex: "none", color: colorFor(c.cpu_percent, 70, 90) }}
+                        >
                           {c.cpu_percent.toFixed(1)}%
                         </span>
                         <span className={`badge ${c.state === "running" ? "up" : "down"}`}>
@@ -207,7 +423,12 @@ export default function App() {
                       <div className="smart-item" key={s.device}>
                         <span className="name">
                           {s.device}
-                          {s.temperature_celsius != null ? ` · ${s.temperature_celsius}°C` : ""}
+                          {s.temperature_celsius != null && (
+                            <span style={{ color: colorFor(s.temperature_celsius, 45, 55) }}>
+                              {" "}
+                              · {s.temperature_celsius}°C
+                            </span>
+                          )}
                         </span>
                         <span className={`badge ${s.health_ok ? "up" : "down"}`}>
                           {s.health_ok ? "OK" : "FEHLER"}
@@ -217,8 +438,7 @@ export default function App() {
                   </div>
                 </>
               )}
-            </>
-          )}
+          </>
         </div>
       ) : (
         <div className="offline">
@@ -226,21 +446,109 @@ export default function App() {
         </div>
       )}
 
-      <div className="hint">Strg+Alt+H: Klick-durch umschalten</div>
     </div>
   );
 }
 
-function Row({ label, percent, value }: { label: string; percent: number; value: string }) {
+function Gauge({
+  label,
+  percent,
+  value,
+  color,
+}: {
+  label: string;
+  percent: number;
+  value: string;
+  color: string;
+}) {
+  const size = 80;
+  const strokeWidth = 8;
+  const r = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * r;
+  const clamped = Math.max(0, Math.min(percent, 100));
+  const offset = circumference * (1 - clamped / 100);
+
   return (
-    <div className="metric-row">
-      <div className="metric-head">
-        <span>{label}</span>
-        <span>{value}</span>
+    <div className="gauge-card">
+      <div className="gauge">
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+          <circle cx={size / 2} cy={size / 2} r={r} className="gauge-track" strokeWidth={strokeWidth} fill="none" />
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={r}
+            className="gauge-fill"
+            stroke={color}
+            strokeWidth={strokeWidth}
+            fill="none"
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+          />
+        </svg>
+        <div className="gauge-text">
+          <div className="gauge-value">{value}</div>
+          <div className="gauge-label">{label}</div>
+        </div>
       </div>
-      <div className="bar">
-        <div className="bar-fill" style={{ width: `${Math.min(percent, 100)}%` }} />
+    </div>
+  );
+}
+
+function MiniGaugeRow({
+  items,
+}: {
+  items: { label: string; value: string; percent: number; color: string }[];
+}) {
+  return (
+    <div className="mini-gauge-row">
+      {items.map((item) => (
+        <MiniGauge key={item.label} {...item} />
+      ))}
+    </div>
+  );
+}
+
+function MiniGauge({
+  label,
+  value,
+  percent,
+  color,
+}: {
+  label: string;
+  value: string;
+  percent: number;
+  color: string;
+}) {
+  const size = 40;
+  const strokeWidth = 4;
+  const r = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * r;
+  const clamped = Math.max(0, Math.min(percent, 100));
+  const offset = circumference * (1 - clamped / 100);
+
+  return (
+    <div className="mini-gauge">
+      <div className="gauge" style={{ width: size, height: size }}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+          <circle cx={size / 2} cy={size / 2} r={r} className="gauge-track" strokeWidth={strokeWidth} fill="none" />
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={r}
+            stroke={color}
+            strokeWidth={strokeWidth}
+            fill="none"
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+          />
+        </svg>
       </div>
+      <div className="mini-gauge-value" style={{ color }}>
+        {value}
+      </div>
+      <div className="mini-gauge-label">{label}</div>
     </div>
   );
 }

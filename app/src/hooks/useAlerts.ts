@@ -11,12 +11,16 @@ export function useAlerts(metrics: Metrics | null, status: ConnectionStatus, thr
 
   useEffect(() => {
     (async () => {
-      let granted = await isPermissionGranted();
-      if (!granted) {
-        const result = await requestPermission();
-        granted = result === "granted";
+      try {
+        let granted = await isPermissionGranted();
+        if (!granted) {
+          const result = await requestPermission();
+          granted = result === "granted";
+        }
+        permissionGranted.current = granted;
+      } catch {
+        // Tauri-Bridge noch nicht bereit o.ae. - Benachrichtigungen bleiben dann aus
       }
-      permissionGranted.current = granted;
     })();
   }, []);
 

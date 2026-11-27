@@ -1,11 +1,26 @@
+mod terminal;
+
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, WindowEvent};
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_window_state::StateFlags;
+use terminal::PtyState;
 
 #[tauri::command]
 fn set_click_through(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
     window.set_ignore_cursor_events(enabled).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn open_terminal_window(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("terminal")
+        .ok_or_else(|| "Terminal-Fenster nicht gefunden".to_string())?;
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 const KEYRING_SERVICE: &str = "de.vincefidanli.homeserveroverlay";
@@ -54,8 +69,11 @@ pub fn run() {
             None,
         ))
         .plugin(
-            tauri_plugin_window_state::Builder::default().build(),
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::POSITION)
+                .build(),
         )
+        .manage(PtyState::default())
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app, shortcut, event| {
             let toggle_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyH);
             if shortcut == &toggle_shortcut && event.state() == ShortcutState::Pressed {
@@ -67,6 +85,11 @@ pub fn run() {
             }
         }).build())
         .setup(|app| {
+            let autolaunch = app.autolaunch();
+            if !autolaunch.is_enabled().unwrap_or(false) {
+                let _ = autolaunch.enable();
+            }
+
             let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyH);
             app.global_shortcut().register(shortcut)?;
 
@@ -107,13 +130,28 @@ pub fn run() {
                 });
             }
 
+            if let Some(window) = app.get_webview_window("terminal") {
+                let win_clone = window.clone();
+                window.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = win_clone.hide();
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             set_click_through,
+            open_terminal_window,
             save_token,
             load_token,
-            delete_token
+            delete_token,
+            terminal::ssh_spawn,
+            terminal::ssh_write,
+            terminal::ssh_resize,
+            terminal::ssh_kill
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

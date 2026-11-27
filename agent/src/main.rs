@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
+use tower_http::cors::CorsLayer;
 use tracing::{info, warn};
 
 use history::History;
@@ -82,6 +83,7 @@ async fn main() {
         .route("/healthz", get(|| async { "ok" }))
         .route("/ws", get(ws_handler))
         .route("/api/history", get(history_handler))
+        .layer(CorsLayer::permissive())
         .with_state(state);
 
     let addr: SocketAddr = bind_addr.parse().expect("ungueltige AGENT_BIND Adresse");

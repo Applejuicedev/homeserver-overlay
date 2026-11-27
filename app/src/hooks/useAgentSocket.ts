@@ -35,6 +35,8 @@ export interface Metrics {
   containers: ContainerInfo[];
   smart: SmartInfo[];
   cpu_temp_celsius: number | null;
+  network_rx_bytes_per_sec: number;
+  network_tx_bytes_per_sec: number;
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
