@@ -54,6 +54,7 @@ jobs:
         with:
           files: agent/target/${{ matrix.target }}/release/homeserver-agent
           fail_on_unmatched_files: false
+          draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
