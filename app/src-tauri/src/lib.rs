@@ -51,6 +51,26 @@ fn delete_token() -> Result<(), String> {
     }
 }
 
+// Plain-Text-Flag statt Keyring, damit das Windows-Login-Skript (PowerShell)
+// den Mute-Status ebenfalls lesen kann.
+fn jarvis_muted_path() -> std::path::PathBuf {
+    let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home).join(".jarvis_muted")
+}
+
+#[tauri::command]
+fn set_jarvis_muted(muted: bool) -> Result<(), String> {
+    std::fs::write(jarvis_muted_path(), if muted { "1" } else { "0" }).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_jarvis_muted() -> Result<bool, String> {
+    match std::fs::read_to_string(jarvis_muted_path()) {
+        Ok(s) => Ok(s.trim() == "1"),
+        Err(_) => Ok(false),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -148,6 +168,8 @@ pub fn run() {
             save_token,
             load_token,
             delete_token,
+            set_jarvis_muted,
+            get_jarvis_muted,
             terminal::ssh_spawn,
             terminal::ssh_write,
             terminal::ssh_resize,

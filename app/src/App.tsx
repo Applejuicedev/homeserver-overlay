@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { useAgentSocket } from "./hooks/useAgentSocket";
 import { useHistory } from "./hooks/useHistory";
+import { useJarvisBriefing } from "./hooks/useJarvisBriefing";
 import { useSettings, type Theme, type Thresholds } from "./hooks/useSettings";
 import { useAlerts } from "./hooks/useAlerts";
 import { useUpdater } from "./hooks/useUpdater";
@@ -54,8 +55,8 @@ function diskLabel(mountPoint: string): string {
   return parts[parts.length - 1] ?? mountPoint;
 }
 
-const COMPACT_SIZE = { width: 210, height: 122 };
-const EXPANDED_SIZE = { width: 460, height: 660 };
+const EXPANDED_SIZE = { width: 480, height: 660 };
+const COMPACT_SIZE = { width: EXPANDED_SIZE.width, height: 87 };
 
 export default function App() {
   const [serverUrl, setServerUrl] = useState(
@@ -79,6 +80,20 @@ export default function App() {
   }, []);
   const [expanded, setExpanded] = useState(false);
   const [clickThrough, setClickThrough] = useState(false);
+  const [jarvisMuted, setJarvisMuted] = useState(false);
+  const jarvis = useJarvisBriefing();
+
+  useEffect(() => {
+    invoke<boolean>("get_jarvis_muted").then(setJarvisMuted).catch(() => {});
+  }, []);
+
+  function toggleJarvisMuted() {
+    setJarvisMuted((prev) => {
+      const next = !prev;
+      invoke("set_jarvis_muted", { muted: next }).catch(() => {});
+      return next;
+    });
+  }
 
   const { metrics, status } = useAgentSocket(serverUrl, token);
   const history = useHistory(serverUrl, token, 30);
@@ -171,7 +186,7 @@ export default function App() {
 
   return (
     <div
-      className={`overlay ${clickThrough ? "click-through" : ""}`}
+      className={`overlay ${clickThrough ? "click-through" : ""} ${expanded ? "" : "compact"}`}
       style={{ opacity }}
       title={!expanded ? "Strg+Alt+H: Klick-durch umschalten" : undefined}
     >
@@ -228,68 +243,83 @@ export default function App() {
           installing={installing}
         />
       ) : metrics && !expanded ? (
-        <MiniGaugeRow
-          items={[
-            {
-              label: "CPU",
-              value: `${metrics.cpu_percent_total.toFixed(0)}%`,
-              percent: metrics.cpu_percent_total,
-              color: colorFor(metrics.cpu_percent_total, 70, 90),
-            },
-            {
-              label: "RAM",
-              value: `${memPercent.toFixed(0)}%`,
-              percent: memPercent,
-              color: colorFor(memPercent, 70, 90),
-            },
-            {
-              label: "Disk",
-              value: `${rootDiskPercent.toFixed(0)}%`,
-              percent: rootDiskPercent,
-              color: colorFor(rootDiskPercent, thresholds.diskPercent - 15, thresholds.diskPercent),
-            },
-          ]}
-        />
+        <div className="compact-row">
+          <MiniGaugeRow
+            items={[
+              {
+                label: "CPU",
+                value: `${metrics.cpu_percent_total.toFixed(0)}%`,
+                percent: metrics.cpu_percent_total,
+                color: colorFor(metrics.cpu_percent_total, 70, 90),
+              },
+              {
+                label: "RAM",
+                value: `${memPercent.toFixed(0)}%`,
+                percent: memPercent,
+                color: colorFor(memPercent, 70, 90),
+              },
+              {
+                label: "Disk",
+                value: `${rootDiskPercent.toFixed(0)}%`,
+                percent: rootDiskPercent,
+                color: colorFor(rootDiskPercent, thresholds.diskPercent - 15, thresholds.diskPercent),
+              },
+            ]}
+          />
+          <JarvisPanel
+            briefing={jarvis}
+            muted={jarvisMuted}
+            onToggleMute={toggleJarvisMuted}
+            compact
+          />
+        </div>
       ) : metrics ? (
         <div className="metrics">
-          <div className="gauge-grid">
-            <Gauge
-              label="CPU"
-              percent={metrics.cpu_percent_total}
-              value={`${metrics.cpu_percent_total.toFixed(0)}%`}
-              color={colorFor(metrics.cpu_percent_total, 70, 90)}
-            />
-            <Gauge
-              label="RAM"
-              percent={memPercent}
-              value={`${memPercent.toFixed(0)}%`}
-              color={colorFor(memPercent, 70, 90)}
-            />
-            {rootDisk && (
+          <div className="gauge-row">
+            <div className="gauge-grid">
               <Gauge
-                label="Disk"
-                percent={rootDiskPercent}
-                value={`${rootDiskPercent.toFixed(0)}%`}
-                color={colorFor(rootDiskPercent, thresholds.diskPercent - 15, thresholds.diskPercent)}
+                label="CPU"
+                percent={metrics.cpu_percent_total}
+                value={`${metrics.cpu_percent_total.toFixed(0)}%`}
+                color={colorFor(metrics.cpu_percent_total, 70, 90)}
               />
-            )}
-            {metrics.cpu_temp_celsius != null ? (
               <Gauge
-                label="Temp"
-                percent={metrics.cpu_temp_celsius}
-                value={`${metrics.cpu_temp_celsius.toFixed(0)}°C`}
-                color={colorFor(metrics.cpu_temp_celsius, thresholds.cpuTempCelsius - 15, thresholds.cpuTempCelsius)}
+                label="RAM"
+                percent={memPercent}
+                value={`${memPercent.toFixed(0)}%`}
+                color={colorFor(memPercent, 70, 90)}
               />
-            ) : (
-              metrics.swap_total_bytes > 0 && (
+              {rootDisk && (
                 <Gauge
-                  label="Swap"
-                  percent={swapPercent}
-                  value={`${swapPercent.toFixed(0)}%`}
-                  color={colorFor(swapPercent, 50, 80)}
+                  label="Disk"
+                  percent={rootDiskPercent}
+                  value={`${rootDiskPercent.toFixed(0)}%`}
+                  color={colorFor(rootDiskPercent, thresholds.diskPercent - 15, thresholds.diskPercent)}
                 />
-              )
-            )}
+              )}
+              {metrics.cpu_temp_celsius != null ? (
+                <Gauge
+                  label="Temp"
+                  percent={metrics.cpu_temp_celsius}
+                  value={`${metrics.cpu_temp_celsius.toFixed(0)}°C`}
+                  color={colorFor(metrics.cpu_temp_celsius, thresholds.cpuTempCelsius - 15, thresholds.cpuTempCelsius)}
+                />
+              ) : (
+                metrics.swap_total_bytes > 0 && (
+                  <Gauge
+                    label="Swap"
+                    percent={swapPercent}
+                    value={`${swapPercent.toFixed(0)}%`}
+                    color={colorFor(swapPercent, 50, 80)}
+                  />
+                )
+              )}
+            </div>
+            <JarvisPanel
+              briefing={jarvis}
+              muted={jarvisMuted}
+              onToggleMute={toggleJarvisMuted}
+            />
           </div>
 
           <div className="info-grid">
@@ -450,6 +480,142 @@ export default function App() {
   );
 }
 
+function JarvisPanel({
+  briefing,
+  muted,
+  onToggleMute,
+  compact,
+}: {
+  briefing: ReturnType<typeof useJarvisBriefing>;
+  muted: boolean;
+  onToggleMute: () => void;
+  compact?: boolean;
+}) {
+  const statusColor = !briefing.reachable
+    ? "var(--muted)"
+    : briefing.hasIssues
+      ? "var(--warn)"
+      : "var(--good)";
+
+  return (
+    <div className={compact ? "jarvis-panel-compact" : "jarvis-panel"}>
+      <div className="jarvis-head">
+        <span className="jarvis-dot" style={{ background: statusColor, color: statusColor }} />
+        <span className="jarvis-title">Jarvis</span>
+        <button
+          className="icon-btn jarvis-mute"
+          onClick={onToggleMute}
+          title={muted ? "Stimme einschalten" : "Stimme ausschalten"}
+        >
+          {muted ? "🔇" : "🔊"}
+        </button>
+      </div>
+      <p
+        className="jarvis-text"
+        title={briefing.reachable && !briefing.loading ? briefing.shortSummary : undefined}
+      >
+        {!briefing.reachable
+          ? "Nicht erreichbar"
+          : briefing.loading
+            ? "Lade…"
+            : briefing.hasIssues
+              ? `${briefing.issuesCount} Wert${briefing.issuesCount === 1 ? "" : "e"} kritisch`
+              : "Alles okay"}
+      </p>
+      {!compact && <JarvisChat muted={muted} />}
+    </div>
+  );
+}
+
+const JARVIS_URL = "http://100.82.168.54:8092";
+
+function JarvisChat({ muted }: { muted: boolean }) {
+  const [log, setLog] = useState<{ role: "user" | "bot"; text: string }[]>([]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(
+    () => localStorage.getItem("jarvis_session") ?? null
+  );
+  const logRef = useRef<HTMLDivElement>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [log, sending]);
+
+  async function speak(text: string) {
+    if (muted) return;
+    try {
+      audioRef.current?.pause();
+      const res = await fetch(`${JARVIS_URL}/api/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const audio = new Audio(URL.createObjectURL(blob));
+      audioRef.current = audio;
+      audio.volume = 0.7;
+      audio.play().catch(() => {});
+    } catch {
+      // Sprachausgabe optional - Fehler hier stillschweigend ignorieren
+    }
+  }
+
+  async function send(e: FormEvent) {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text || sending) return;
+    setInput("");
+    setLog((l) => [...l, { role: "user", text }]);
+    setSending(true);
+    try {
+      const res = await fetch(`${JARVIS_URL}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text, session_id: sessionId }),
+      });
+      const data = await res.json();
+      setSessionId(data.session_id);
+      localStorage.setItem("jarvis_session", data.session_id);
+      setLog((l) => [...l, { role: "bot", text: data.reply }]);
+      speak(data.reply);
+    } catch {
+      setLog((l) => [...l, { role: "bot", text: "Fehler bei der Anfrage." }]);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="jarvis-chat">
+      {log.length > 0 && (
+        <div className="jarvis-log" ref={logRef}>
+          {log.map((m, i) => (
+            <div key={i} className={`jarvis-msg ${m.role}`}>
+              {m.text}
+            </div>
+          ))}
+          {sending && <div className="jarvis-msg bot jarvis-typing">…</div>}
+        </div>
+      )}
+      <form className="jarvis-input-row" onSubmit={send}>
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Frag Jarvis…"
+          disabled={sending}
+        />
+        <button type="submit" disabled={sending || !input.trim()}>
+          ➤
+        </button>
+      </form>
+    </div>
+  );
+}
+
 function Gauge({
   label,
   percent,
@@ -520,7 +686,7 @@ function MiniGauge({
   percent: number;
   color: string;
 }) {
-  const size = 40;
+  const size = 46;
   const strokeWidth = 4;
   const r = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * r;
@@ -544,11 +710,11 @@ function MiniGauge({
             strokeDashoffset={offset}
           />
         </svg>
+        <div className="mini-gauge-text">
+          <div className="mini-gauge-value">{value}</div>
+          <div className="mini-gauge-label">{label}</div>
+        </div>
       </div>
-      <div className="mini-gauge-value" style={{ color }}>
-        {value}
-      </div>
-      <div className="mini-gauge-label">{label}</div>
     </div>
   );
 }
